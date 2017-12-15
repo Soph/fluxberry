@@ -1,0 +1,14 @@
+[Unit]
+Description=Environment Monitor
+After=network.target
+
+[Service]
+ExecStart=/home/pi/monitoring/monitoring.sh
+WorkingDirectory=/home/pi/monitoring
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=pi
+
+[Install]
+WantedBy=multi-user.target
