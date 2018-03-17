@@ -1,0 +1,45 @@
+# SRV comes from .env
+
+version: '3'
+
+services:
+  mosquitto:
+    hostname: mqtt
+    image: toke/mosquitto:latest
+    build: mosquitto/
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - /data/mosquitto/config/:/mqtt/config/:ro
+      - /data/mosquitto/log/:/mqtt/log/
+      - /data/mosquitto/data/:/mqtt/data/
+    restart: unless-stopped
+
+  telegraf:
+    hostname: telegraf
+    image: telegraf:latest
+    depends_on:
+      - mqtt
+    build: telegraf/
+    environment:
+      HOST_PROC: "/rootfs/proc"
+      HOST_SYS: "/rootfs/sys"
+      HOST_ETC: "/rootfs/etc"
+    ports:
+      - "8092:8092/udp"
+      - "8094:8094"
+      - "8125:8125/udp"
+    volumes:
+      - /data/telegraf/config/:/etc/telegraf/:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/rootfs/sys:ro
+      - /proc:/rootfs/proc:ro
+      - /etc:/rootfs/etc:ro
+    restart: unless-stopped
+
+  avahi:
+    hostname: avahi
+    image: ianblenke/avahi
+    volumes:
+      - /var/run/dbus:/var/run/dbus
