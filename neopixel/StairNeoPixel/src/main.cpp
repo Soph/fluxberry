@@ -7,7 +7,7 @@
 
 #define NUM_LEDS 175
 
-#define BRIGHTNESS 100
+#define BRIGHTNESS 50
 
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, PIN, NEO_GRBW + NEO_KHZ800);
 
@@ -180,8 +180,8 @@ void whiteOverBlue(uint8_t wait, uint8_t whiteSpeed, uint8_t whiteLength ) {
     for(int j=0; j<256; j++) {
       for(uint16_t i=0; i<strip.numPixels(); i++) {
         if((i >= tail && i <= head) || (tail > head && i >= tail) || (tail > head && i <= head) ){
-          strip.setPixelColor(i, Wheel(((i * 256 / strip.numPixels()) + j) & 255));
-//          strip.setPixelColor(i, strip.Color(0,0,0, 255 ) );
+          //strip.setPixelColor(i, Wheel(((i * 256 / (strip.numPixels() *2)) + j) & 255));
+          strip.setPixelColor(i, strip.Color(0,0,0, 255 ) );
         }
         else{
           strip.setPixelColor(i, strip.Color(0, 0, 255) );
@@ -288,5 +288,5 @@ void rainbow(uint8_t wait) {
 }
 
 void loop() {
-  whiteOverBlue(20,75,5);  
+  whiteOverBlue(20,75,20);  
 }
