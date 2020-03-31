@@ -5,7 +5,8 @@
 
 #define PIN 6
 
-#define NUM_LEDS 175
+// #define NUM_LEDS 175 // downstairs
+#define NUM_LEDS 139 // upstairs
 
 #define BRIGHTNESS 50
 
@@ -178,7 +179,7 @@ void whiteOverBlue(uint8_t wait, uint8_t whiteSpeed, uint8_t whiteLength ) {
 
   while(true){
     for(int j=0; j<256; j++) {
-      for(uint16_t i=0; i<strip.numPixels(); i++) {
+      for(uint16_t i=strip.numPixels(); i>0; i--) {
         if((i >= tail && i <= head) || (tail > head && i >= tail) || (tail > head && i <= head) ){
           //strip.setPixelColor(i, Wheel(((i * 256 / (strip.numPixels() *2)) + j) & 255));
           strip.setPixelColor(i, strip.Color(0,0,0, 255 ) );
