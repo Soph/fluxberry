@@ -4,8 +4,10 @@
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
 
-#define HOSTNAME "ESP_%06X"
+#define HOSTNAME "ESP_%06llu"
 #define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+
+#define MAX_PMS_READ_COUNT 3
 
 const char *ssid = "";
 const char *password = "";
@@ -20,8 +22,29 @@ String influxString(String host, String key, String value);
 void measureVoltageLevels();
 void wakeupPMS();
 void readPMS();
+void setupNetworking();
+void sendVoltageLevels();
+void sendPMS();
+
+enum STATE {
+  STATE_START,
+  STATE_READ_DATA_PMS,
+  STATE_SEND_DATA
+};
 
 RTC_DATA_ATTR boolean readData = false;
+RTC_DATA_ATTR STATE currentState = STATE_START;
+RTC_DATA_ATTR double powerVoltage = 0;
+RTC_DATA_ATTR double batteryVoltage = 0;
+RTC_DATA_ATTR int voltageReadCount = 0;
+RTC_DATA_ATTR int pmsReadCount = 0;
+RTC_DATA_ATTR int pm_ae_ug_1_0 = 0;
+RTC_DATA_ATTR int pm_ae_ug_2_5 = 0;
+RTC_DATA_ATTR int pm_ae_ug_10_0 = 0;
+RTC_DATA_ATTR int pm_sp_ug_1_0 = 0;
+RTC_DATA_ATTR int pm_sp_ug_2_5 = 0;
+RTC_DATA_ATTR int pm_sp_ug_10_0 = 0;
+RTC_DATA_ATTR int pmsMeasurementsCount = 0;
 
 PMS pms(Serial1);
 PMS::DATA data;
@@ -31,52 +54,65 @@ void setup()
   Serial.begin(9600);  // GPIO1, GPIO3 (TX/RX pin on ESP-12E Development Board)
   Serial1.begin(9600); // GPIO2 (D4 pin on ESP-12E Development Board)
 
-  if (readData) {
-    setupWIFI(hostString, ssid, password);
-
-    if (!MDNS.begin(hostString))
-    {
-      Serial.println("Error setting up MDNS responder!");
-    }
-
-    while (!searchInflux())
-    {
-      Serial.println("No Influx Service found");
-      delay(500);
-    }
-    Serial.print(MDNS.hostname(0));
-    Serial.print(" (");
-    Serial.print(MDNS.IP(0));
-    Serial.print(":");
-    Serial.print(MDNS.port(0));
-    Serial.println(")");
-
-    measureVoltageLevels();
-  }
-  else 
+  measureVoltageLevels();
+  
+  switch (currentState)
   {
-    Serial.println("Skipping WIFI since only sensor booting");
+    case STATE_START:
+      Serial.println("STATE: START");
+      wakeupPMS();
+      esp_sleep_enable_timer_wakeup(30 * uS_TO_S_FACTOR);
+      currentState = STATE_READ_DATA_PMS;
+      break;
+    case STATE_READ_DATA_PMS:
+      Serial.println("STATE: READ DATA PMS");
+      readPMS();
+      pmsReadCount++;
+      esp_sleep_enable_timer_wakeup(3 * uS_TO_S_FACTOR);
+      if (pmsReadCount >= MAX_PMS_READ_COUNT)
+      {
+        currentState = STATE_SEND_DATA;
+      }
+      break;
+    case STATE_SEND_DATA:
+      Serial.println("STATE: SEND DATA");
+      setupNetworking();
+      sendVoltageLevels();
+      readPMS();
+      pms.sleep();
+      sendPMS();
+      esp_sleep_enable_timer_wakeup(570 * uS_TO_S_FACTOR);
+      break;
   }
-
-  pms.passiveMode(); // Switch to passive mode
-
-  if (readData) {
-    readPMS();
-    readData = false;
-    esp_sleep_enable_timer_wakeup(570 * uS_TO_S_FACTOR);
-  }
-  else
-  {
-    wakeupPMS();
-    readData = true;
-    esp_sleep_enable_timer_wakeup(30 * uS_TO_S_FACTOR);
-  }
+ 
   esp_deep_sleep_start();
+}
+
+void setupNetworking() {
+  setupWIFI(hostString, ssid, password);
+
+  if (!MDNS.begin(hostString))
+  {
+    Serial.println("Error setting up MDNS responder!");
+  }
+
+  while (!searchInflux())
+  {
+    Serial.println("No Influx Service found");
+    delay(500);
+  }
+  Serial.print(MDNS.hostname(0));
+  Serial.print(" (");
+  Serial.print(MDNS.IP(0));
+  Serial.print(":");
+  Serial.print(MDNS.port(0));
+  Serial.println(")");
 }
 
 void wakeupPMS() {
   Serial.println("Waking up, wait 30 seconds for stable readings...");
   pms.wakeUp();
+  pms.passiveMode(); // Switch to passive mode
 }
 
 void readPMS() {
@@ -85,51 +121,49 @@ void readPMS() {
   // throw away first
   pms.requestRead();
   pms.readUntil(data);
-
-  int pm_ae_ug_1_0 = 0;
-  int pm_ae_ug_2_5 = 0;
-  int pm_ae_ug_10_0 = 0;
-  int pm_sp_ug_1_0 = 0;
-  int pm_sp_ug_2_5 = 0;
-  int pm_sp_ug_10_0 = 0;
-
-  int measurements = 0;
-  for (int i = 0; i < 3; i++)
+  pms.requestRead();
+  if (pms.readUntil(data))
   {
-    pms.requestRead();
-    if (pms.readUntil(data))
-    {
-      measurements++;
-      pm_ae_ug_1_0 += data.PM_AE_UG_1_0;
-      pm_ae_ug_2_5 += data.PM_AE_UG_2_5;
-      pm_ae_ug_10_0 += data.PM_AE_UG_10_0;
-      pm_sp_ug_1_0 += data.PM_SP_UG_1_0;
-      pm_sp_ug_2_5 += data.PM_SP_UG_2_5;
-      pm_sp_ug_10_0 += data.PM_SP_UG_10_0;
-      Serial.print("measure 1.0: ");
-      Serial.println(String(pm_ae_ug_1_0));
-    }
-    delay(1000);
+    pmsMeasurementsCount++;
+    pm_ae_ug_1_0 += data.PM_AE_UG_1_0;
+    pm_ae_ug_2_5 += data.PM_AE_UG_2_5;
+    pm_ae_ug_10_0 += data.PM_AE_UG_10_0;
+    pm_sp_ug_1_0 += data.PM_SP_UG_1_0;
+    pm_sp_ug_2_5 += data.PM_SP_UG_2_5;
+    pm_sp_ug_10_0 += data.PM_SP_UG_10_0;
+    Serial.print("measure 1.0: ");
+    Serial.println(String(pm_ae_ug_1_0));
   }
+}
 
-  if (measurements > 0) {
-    sendUDPLine(udp, influxString(String(hostString), "pm_ae_ug_1_0", String((int)round(pm_ae_ug_1_0 / measurements)) + "i"));
-    sendUDPLine(udp, influxString(String(hostString), "pm_ae_ug_2_5", String((int)round(pm_ae_ug_2_5 / measurements)) + "i"));
-    sendUDPLine(udp, influxString(String(hostString), "pm_ae_ug_10_0", String((int)round(pm_ae_ug_10_0 / measurements)) + "i"));
-    sendUDPLine(udp, influxString(String(hostString), "pm_sp_ug_1_0", String((int)round(pm_sp_ug_1_0 / measurements)) + "i"));
-    sendUDPLine(udp, influxString(String(hostString), "pm_sp_ug_2_5", String((int)round(pm_sp_ug_2_5 / measurements)) + "i"));
-    sendUDPLine(udp, influxString(String(hostString), "pm_sp_ug_10_0", String((int)round(pm_sp_ug_10_0 / measurements)) + "i"));
-  }
-
-  Serial.println("Going to sleep for 60 seconds.");
-  pms.sleep();
+void sendPMS() {
+  sendUDPLine(udp, influxString(String(hostString), "pm_ae_ug_1_0", String((int)round(pm_ae_ug_1_0 / pmsMeasurementsCount)) + "i"));
+  sendUDPLine(udp, influxString(String(hostString), "pm_ae_ug_2_5", String((int)round(pm_ae_ug_2_5 / pmsMeasurementsCount)) + "i"));
+  sendUDPLine(udp, influxString(String(hostString), "pm_ae_ug_10_0", String((int)round(pm_ae_ug_10_0 / pmsMeasurementsCount)) + "i"));
+  sendUDPLine(udp, influxString(String(hostString), "pm_sp_ug_1_0", String((int)round(pm_sp_ug_1_0 / pmsMeasurementsCount)) + "i"));
+  sendUDPLine(udp, influxString(String(hostString), "pm_sp_ug_2_5", String((int)round(pm_sp_ug_2_5 / pmsMeasurementsCount)) + "i"));
+  sendUDPLine(udp, influxString(String(hostString), "pm_sp_ug_10_0", String((int)round(pm_sp_ug_10_0 / pmsMeasurementsCount)) + "i"));
+  pmsMeasurementsCount = 0;
+  pm_ae_ug_1_0 = 0;
+  pm_ae_ug_2_5 = 0;
+  pm_ae_ug_10_0 = 0;
+  pm_sp_ug_1_0 = 0;
+  pm_sp_ug_2_5 = 0;
+  pm_sp_ug_10_0 = 0;
 }
 
 void measureVoltageLevels() {
-  float powerVoltage = analogRead(A13) / 4095.00 * 3.3 * 2 * 1.1;
-  sendUDPLine(udp, influxString(String(hostString), "power_voltage", String(powerVoltage, 2)));
-  float batteryVoltage = analogRead(A3) / 4095.00 * 3.3 * 1.1 * 5/3.41;
-  sendUDPLine(udp, influxString(String(hostString), "battery_voltage", String(batteryVoltage, 2)));
+  voltageReadCount++;
+  powerVoltage += analogRead(A13) / 4095.00 * 3.3 * 2 * 1.1;
+  batteryVoltage += analogRead(A3) / 4095.00 * 3.3 * 1.1 * 5/3.41;
+}
+
+void sendVoltageLevels() {
+  sendUDPLine(udp, influxString(String(hostString), "power_voltage", String(powerVoltage / voltageReadCount, 2)));
+  sendUDPLine(udp, influxString(String(hostString), "battery_voltage", String(batteryVoltage / voltageReadCount, 2)));
+  voltageReadCount = 0;
+  powerVoltage = 0;
+  batteryVoltage = 0;
 }
 
 void loop()
